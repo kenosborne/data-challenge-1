@@ -176,6 +176,16 @@ ggplot(customerData, aes(x = BikeBuyer)) +
 
 The next question asks for the rank ordering of Occupation by Median Yearly Income
 
+We can begin by visualizing the data with a violin plot.
+
+```{r}
+ggplot(customerData, aes(x=Occupation, y=YearlyIncome, fill=Occupation)) +
+  geom_violin() + 
+  theme_minimal()
+```
+
+Already we get some sense of the rank ordering, but we'll also do a quantitative analysis.
+
 ```{r}
 customerData %>% 
   group_by(Occupation) %>% 

@@ -73,22 +73,26 @@ Moving on, we work to remove duplicate entries.
 
 ```{r}
 customerInfo %>% nrow()
+
 customerInfo %<>% .[!duplicated(.),]
-customerInfo %>% nrow()
-
 bikeBuyer %<>% .[!duplicated(.),]
-bikeBuyer %>% nrow()
-
 spend %<>% .[!duplicated(.),]
-spend %>% nrow()
+
+cat( 
+  customerInfo %>% nrow(),
+  bikeBuyer %>% nrow(),
+  spend %>% nrow() 
+)
 ```
 
 Here we've removed all observations (AKA customers) with exactly the same `CustomerID` values in all data frames, but we see that `bikeBuyer` ended up with fewer rows than the other dataframes. My suspicion is that although we've eliminated "total duplications", there are still several repeated `CustomerIDs` with slightly varying entries.
 
 ```{r}
-customerInfo$CustomerID %>% unique() %>% length()
-bikeBuyer$CustomerID %>% unique() %>% length()
-spend$CustomerID %>% unique() %>% length()
+cat(
+  customerInfo$CustomerID %>% unique() %>% length(),
+  bikeBuyer$CustomerID %>% unique() %>% length(),
+  spend$CustomerID %>% unique() %>% length()
+)
 ```
 
 Indeed, we see that all our data frames have some duplicated `CustomerID` values. Normally we would look for a criterion that would help us decide which values to keep, but thankfully we were provided with such a criterion at the beginning of this challenge--
@@ -118,9 +122,11 @@ customerInfo %<>% keepOldest()
 bikeBuyer %<>% keepOldest()
 spend %<>% keepOldest()
 
-nrow(customerInfo)
-nrow(bikeBuyer)
-nrow(spend)
+cat(
+  nrow(customerInfo),
+  nrow(bikeBuyer),
+  nrow(spend)
+)
 ```
 
 Since everything seems to be working out, we'll combine all the data into one big dataframe.
@@ -142,14 +148,17 @@ The first few questions are about summary statistics for the `AveMonthSpend` var
 ```{r}
 ggplot(customerData) + 
   geom_histogram(aes(x = AveMonthSpend, alpha = .3)) + 
-  geom_rug(aes(x = AveMonthSpend))
+  geom_rug(aes(x = AveMonthSpend)) + 
+  theme_minimal()
 ```
 
 We see that the distribution is skewed right. We'll get a bit more quantitative information with a few summary statistics.
 
 ```{r}
-summary(customerData$AveMonthSpend)
-sd(customerData$AveMonthSpend)
+cat(
+  summary(customerData$AveMonthSpend),
+  sd(customerData$AveMonthSpend)
+)
 ```
 
 With this information we can answer the first five questions.
@@ -166,7 +175,8 @@ The next question is about the distribution of bike buyers.
 
 ```{r}
 ggplot(customerData, aes(x = BikeBuyer)) + 
-  geom_bar()
+  geom_bar(fill = "steelblue") +
+  theme_minimal()
 ```
 
 6. The distribution of the values in the BikeBuyer column indicates:

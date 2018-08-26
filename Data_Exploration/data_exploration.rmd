@@ -1,5 +1,5 @@
 ---
-title: "Data_Exploration"
+title: "Data Exploration"
 author: "Kenneth L Osborne"
 date: "August 25, 2018"
 output: html_document

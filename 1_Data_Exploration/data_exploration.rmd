@@ -474,3 +474,11 @@ cat("Married likelihood: ", marriedBuyers/married, "\nSingle likelihood:  ", sin
 ```
 
 A maried customer is NOT more likely to buy a bike.
+
+## Save Data
+
+The last thing we'll do is write a csv file containing all the feature engineering we did on the data set.
+```{r}
+write.csv(customerData, "../customerData.csv", row.names = FALSE)
+```
+

@@ -85,7 +85,7 @@ cat(
 )
 ```
 
-Here we've removed all observations (AKA customers) with exactly the same `CustomerID` values in all data frames, but we see that `bikeBuyer` ended up with fewer rows than the other dataframes. My suspicion is that although we've eliminated "total duplications", there are still several repeated `CustomerIDs` with slightly varying entries.
+Here we've removed all customers with exactly repeated data, but we see that `bikeBuyer` ended up with fewer rows than the other dataframes. The suspicion is that although we've eliminated "total duplications", there are still several repeated `CustomerIDs` with slightly varying entries.
 
 ```{r}
 cat(
@@ -211,4 +211,266 @@ Manual, Clerical, Skilled Manual, Professional, Management
 
 ### Monthly Spending by Age and Sex
 
-The next question asks about monthly spending habits by age and sex.
+The next question asks about monthly spending habits by age and sex, as of 1998 January 01.
+To determine age, we need to use the birth date and the date in question.
+
+```{r}
+customerData %<>% mutate( Age = interval(BirthDate, "1998-01-01")/dyears() )
+customerData %>% select(CustomerID, Gender, BirthDate, Age) %>% head()
+```
+
+The question asks about Males and Females from 3 different groups: 
+
+1. Under 25
+2. 25 - 45
+3. Over 55
+
+We can turn our age variable into several categorical variables to compare more easily.
+
+```{r}
+customerData %<>% mutate( AgeCategory = cut(Age, c(0,25,45,55,max(Age)+1)) )
+levels(customerData$AgeCategory)
+```
+
+With these new categories, we can plot the distributions of male and female spending by age category.
+
+```{r}
+ggplot(customerData, aes(x=Gender, y=AveMonthSpend, fill=Gender)) +
+  geom_violin() +
+  facet_grid(rows = vars(AgeCategory)) + 
+  theme_minimal()
+```
+
+This gives us some idea that males spend more at the bike store than females across all age categories. Comparing just males, we can break down by age category to see who spends the most.
+
+```{r}
+ggplot(
+  customerData %>% filter(Gender == "M"),
+  aes(x=AgeCategory, y=AveMonthSpend, fill=AgeCategory) 
+) +
+  geom_violin() +
+  theme_minimal()
+```
+
+It looks like Males Aged 25-55 are the highest spenders, but a quantitative analysis will be insightful.
+
+```{r}
+customerData %>% 
+  group_by(Gender, AgeCategory) %>% 
+  summarize(
+    meanSpend = mean(AveMonthSpend), 
+    medianSpend = median(AveMonthSpend), 
+    n=n()) %>% 
+  arrange(desc(meanSpend))
+```
+
+We now have enough information to answer the question.
+
+8. Based on their age at the time when the data was collected (1st January 1998), which group of customers accounts for the highest AveMonthSpend values?
+
+We find that men aged 25-45 outspend all other groups. Moreover, this cohort represents the majority of shoppers.
+
+### Average Monthly Spending Habits
+
+This question asks a variety of questions about the variable `AveMonthSpend`, and it's interaction with other variables.
+
+#### Married vs Single
+
+How does marital status interact with spending habits
+
+```{r}
+ggplot(customerData, aes(x=MaritalStatus, y=AveMonthSpend, fill = MaritalStatus)) +
+  geom_violin() + theme_minimal()
+```
+
+It looks like Single Customers are spending less than Married Customers.
+
+```{r}
+customerData %>% 
+  group_by(MaritalStatus) %>% 
+  summarize(
+    meanSpend = mean(AveMonthSpend),
+    medianSpend = median(AveMonthSpend),
+    n = n()
+  )
+```
+
+Married customers have a higher median `AvgMonthSpend` than single customers.
+
+#### Car Count
+
+Checking in on how car count weighs in. First we'll categorize car owners into 3 groups.
+
+```{r}
+customerData %<>% mutate( CarCategory = cut(
+  NumberCarsOwned, 
+  c(0,1,3,max(NumberCarsOwned)+1),
+  right = FALSE
+  )
+)
+customerData$CarCategory %>% levels()
+```
+
+We now use these categories to compare spending habits.
+
+```{r}
+ggplot(customerData, aes(CarCategory, AveMonthSpend, fill = CarCategory)) +
+  geom_violin() + theme_minimal()
+```
+
+It's clear that people with 3 or more cars spend the most, on average. A quantitative description follows.
+
+```{r}
+customerData %>% 
+  group_by(CarCategory) %>% 
+  summarize(
+    meanSpend = mean(AveMonthSpend),
+    medianSpend = median(AveMonthSpend),
+    n = n()
+  )
+```
+
+Customers with no car have a LOWER median AvgMonthSpend than customers with three or more cars.
+
+
+#### Gender
+
+Gender differences are as follows
+
+```{r}
+ggplot(customerData, aes(Gender, AveMonthSpend, fill = Gender)) +
+  geom_violin() + theme_minimal()
+```
+
+Quantitatively speaking
+
+```{r}
+customerData %>% 
+  group_by(Gender) %>% 
+  summarize(
+    meanSpend = mean(AveMonthSpend),
+    medianSpend = median(AveMonthSpend),
+    minSpend = min(AveMonthSpend),
+    maxSpend = max(AveMonthSpend),
+    n = n()
+  ) %>% 
+  mutate(rangeSpend = maxSpend - minSpend)
+```
+
+Male customers have a higher median AvgMonthSpend than female customers.
+Female customers DO NOT have a wider range of AvgMonthSpend values than male customers.
+
+#### Children at Home
+
+The number of children at home can easily be turned into a logical variable
+
+```{r}
+customerData %<>% mutate( ChildrenHome = as.logical(NumberChildrenAtHome))
+```
+
+With this we can see differences between the groups.
+
+```{r}
+ggplot(customerData, aes(ChildrenHome, AveMonthSpend, fill = ChildrenHome)) +
+  geom_violin() + theme_minimal()
+```
+
+```{r}
+customerData %>% 
+  group_by(ChildrenHome) %>% 
+  summarize(
+    meanSpend = mean(AveMonthSpend),
+    medianSpend = median(AveMonthSpend),
+    n = n()
+  )
+```
+
+Customers with no children at home have a lower median AvgMonthSpend values than customers with one or more children at home.
+
+
+
+### Bike Buyers
+
+This section looks at variables correlating to customers buying a bike.
+
+#### Yearly Income
+
+```{r}
+ggplot(customerData, aes(factor(BikeBuyer), YearlyIncome, fill = factor(BikeBuyer))) +
+  geom_violin() + theme_minimal()
+```
+
+```{r}
+customerData %>% 
+  group_by(BikeBuyer) %>% 
+  summarize(
+    meanIncome = mean(YearlyIncome),
+    medianIncome = median(YearlyIncome),
+    n = n()
+  )
+```
+
+The median YearlyIncome is higher for customers who bought a bike than for customers who didn't.
+
+#### Cars Owned
+
+```{r}
+ggplot(customerData, aes(factor(NumberCarsOwned), fill = factor(NumberCarsOwned))) +
+  geom_bar() + 
+  facet_grid(vars(factor(BikeBuyer))) +
+  theme_minimal()
+```
+
+```{r}
+customerData %>% 
+  group_by(BikeBuyer) %>% 
+  summarize(
+    meanCars = mean(NumberCarsOwned),
+    medianCars = median(NumberCarsOwned),
+    n = n()
+  )
+```
+
+The median number of cars owned by customers who bought a bike is NOT lower than for customers who didn't.
+
+#### Occupation
+
+This is looking at occupations of those who bought bikes.
+
+```{r}
+ggplot(customerData, aes(Occupation, fill = Occupation)) +
+  geom_bar() + 
+  facet_grid(rows = vars(factor(BikeBuyer))) +
+  theme_minimal()
+```
+
+The most common occupation type for customers who bought a bike is NOT skilled manual.
+
+#### Likelihood
+
+Checking to see which gender or marital status is more *likely* to buy a bike is done by comparing 
+total numbers of these categories that did and didn't buy bikes.
+
+```{r}
+maleBuyers <- customerData %>% filter(Gender == "M", BikeBuyer == 1) %>% nrow()
+males <- customerData %>% filter(Gender == "M") %>% nrow()
+
+femaleBuyers <- customerData %>% filter(Gender == "F", BikeBuyer == 1) %>% nrow()
+females <- customerData %>% filter(Gender == "F") %>% nrow()
+
+cat("Male likelihood:   ", maleBuyers/males, "\nFemale likelihood: ", femaleBuyers/females)
+```
+
+Male customers are more likely to buy bikes than female customers.
+
+```{r}
+marriedBuyers <- customerData %>% filter(MaritalStatus == "M", BikeBuyer == 1) %>% nrow()
+married <- customerData %>% filter(MaritalStatus == "M") %>% nrow()
+
+singleBuyers <- customerData %>% filter(MaritalStatus == "S", BikeBuyer == 1) %>% nrow()
+singles <- customerData %>% filter(MaritalStatus == "S") %>% nrow()
+
+cat("Married likelihood: ", marriedBuyers/married, "\nSingle likelihood:  ", singleBuyers/singles)
+```
+
+A maried customer is NOT more likely to buy a bike.

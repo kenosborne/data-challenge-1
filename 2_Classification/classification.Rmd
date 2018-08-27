@@ -52,29 +52,19 @@ We have 500 observations of 23 different variables, each of which is unique. For
 
 ### Label Imbalance
 
-With any label data, it's useful to know the label balance. For `BikeBuyer`, our current label of interest, we want to know how many people did vs did not buy bikes. We'll transform the label data to make it a bit easier to read, and then check the label balance.
+With any label data, it's useful to know the label balance. For `BikeBuyer`, our current label of interest, we want to know how many people did vs did not buy bikes. We'll transform the label data to make it a bit easier to read, and then check the label balance. We'll do the same for the `HomeOwnerFlag` variable while we're at it.
 
 ```{r}
 customerData %<>% 
   mutate(
-    BikeBuyer = ifelse(BikeBuyer == 1, "yes", "no") %>% as.factor()
+    BikeBuyer = ifelse(BikeBuyer == 1, "yes", "no") %>% as.factor(),
+    HomeOwnerFlag = ifelse(HomeOwnerFlag == 1, "yes", "no") %>% as.factor()
   )
 table(customerData$BikeBuyer)
 table(customerData$BikeBuyer)[1]/table(customerData$BikeBuyer)[2]
 ```
 
-As we can see, the ratio of customers that didn't buy bikes to those who did is 2:1. We'll take that into consideration later, but for now, we'll split `customerData` into training and validation sets.
-
-```{r}
-partition = createDataPartition(customerData$BikeBuyer, times = 1, p = 0.7, list = FALSE)
-training = customerData[partition,] # Create the training sample
-validation = customerData[-partition,] # Create the test sample
-
-cat(
-  "Dim Training:  ", dim(training),
-  "\nDim Validation: ", dim(validation)
-)
-```
+As we can see, the ratio of customers that didn't buy bikes to those who did is 2:1. We'll take that into consideration later. 
 
 ### Feature Selection
 
@@ -94,7 +84,106 @@ Finally, our testing data doesn't have access to the `AveMonthSpend` variable, a
 
 
 ```{r}
-ppCustomerData <- customerData %>% select(-(1:13),-BirthDate, -AgeCategory, -AveMonthSpend)
-ppCustomerData %>% head(10) %>% as.tibble()
+customerData <- customerData %>% select(-(1:13),-BirthDate, -AgeCategory, -AveMonthSpend)
+customerData %>% head(10) %>% as.tibble()
 ```
 
+We'll scale and center the numeric variables.
+
+```{r}
+num_cols <- sapply(customerData,class) %in% c("integer","numeric") %>% 
+  colnames(customerData)[.]
+preProcValues <- preProcess(customerData[,num_cols], method = c("center", "scale"))
+
+ppCustomerData <- customerData
+ppCustomerData[,num_cols] <-  predict(preProcValues, customerData[,num_cols])
+head(ppCustomerData[,num_cols])
+```
+
+We check for low variance features that could be removed from the model.
+
+```{r}
+dummies <- dummyVars(data = ppCustomerData, BikeBuyer ~ .)
+ppCustomerData_dummies <- data.frame(predict(dummies, newdata = ppCustomerData))
+head(ppCustomerData_dummies)
+colnames(ppCustomerData_dummies)
+dim(ppCustomerData_dummies)
+```
+
+We'll check for low variance features. For our purposes, we'll define "low variance" to mean that 95% or more of the cases have the same value. (This parameter is used in `freqCut`)
+
+```{r}
+near_zero <-  nearZeroVar(ppCustomerData_dummies, freqCut = 95/5, uniqueCut = 10, saveMetrics = TRUE)
+low_variance_cols <- near_zero[(near_zero$zeroVar == TRUE) | (near_zero$nzv == TRUE), ]
+low_variance_cols %>% as.tibble()
+```
+
+We have no low variance features in this dataset. We would normally remove (or at least be skeptical of) these low variance features, but there's nothing to do here.
+
+### Split Data
+
+We'll split `customerData` into training and validation sets.
+
+```{r}
+partition  <- createDataPartition(ppCustomerData$BikeBuyer, times = 1, p = 0.7, list = FALSE)
+training   <- customerData[ partition,] # Create the training sample
+validation <- customerData[-partition,] # Create the test sample
+
+cat(
+  "Dim Training:  ", dim(training),
+  "\nDim Validation: ", dim(validation)
+)
+```
+
+## Determine Hyperparamets Using Nested CV
+
+Before continuing we'll convert the remaining character features into factors.
+
+```{r}
+char_cols <- training %>% sapply(class) %in% "character"
+training[,char_cols] %<>% lapply(., as.factor)
+training %>% head() %>% as.tibble
+```
+
+### Inner Loop CV
+
+Because we want our data to be balanced, we weight the cases of bike buyers twice as heavily as non-bike buyers.
+
+We're using the `trainControl` function to specify that we're doing cross validation (CV) across 10 folds, that we're going to record the probability of each class (along with predicted values) in each resample. The `twoClassSummary` function defines the metric as the used for model selection to be ROC.
+
+The `train` function specifies that we're predicting BikeBuyer status based on all the other factors. That we're using the l2 norm "glmnet", how much to weight each case, that we're using the ROC metric, and that the CV information can be found in the `fitControl` object.
+
+```{r}
+## Create a weight vector for the training cases.
+weights <- ifelse(ppCustomerData$BikeBuyer == 'yes', 2/3, 1/3)
+
+fitControl <- trainControl(
+  method = 'cv',
+  number = 10,
+  classProbs = TRUE,
+  summaryFunction = twoClassSummary
+)
+
+cv_mod_roc <- train(
+  BikeBuyer ~ .,
+  data      = ppCustomerData, 
+  method    = "glmnet", 
+  weights   = weights, 
+  metric    = "ROC",
+  trControl = fitControl
+)
+
+cv_mod_roc
+```
+
+We can plot the results of hyperparameter search for maximal ROC 
+
+```{r}
+plot(
+  cv_mod_roc, metric = "ROC", plotType = "level",
+  scales = list(x = list(rot = 90))
+)
+```
+
+
+With the inner 

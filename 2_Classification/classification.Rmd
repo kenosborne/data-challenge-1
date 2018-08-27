@@ -13,6 +13,9 @@ knitr::opts_chunk$set(echo = TRUE)
 suppressPackageStartupMessages(library(magrittr))
 suppressPackageStartupMessages(library(tidyverse))
 suppressPackageStartupMessages(library(lubridate))
+suppressPackageStartupMessages(library(caret))
+suppressPackageStartupMessages(library(ROCR))
+suppressPackageStartupMessages(library(pROC))
 ```
 
 # Classification
@@ -30,4 +33,68 @@ To complete this challenge:
 2. Download the test data. This data includes customer features but does not include bike purchasing or average monthly spend values.
 3. Use your model to predict the corresponding test dataset. Don't forget to apply what you've learned throughout this course.
 4. Go to the next page to check how well your prediction against the actual result.
+
+## Data Prep
+
+Loading the csv files into dataframes in R goes as follows. Note that the `customerData` dataset has been cleaned and explored in the previous section of the data challenge.
+```{r}
+testData <- read.csv("AW_test.csv", stringsAsFactors = FALSE)
+customerData <- read.csv("../customerData.csv", stringsAsFactors = FALSE)
+```
+
+Looking at the structure of the new dataset:
+```{r}
+testData %>% str()
+testData$CustomerID %>% unique() %>% length()
+```
+
+We have 500 observations of 23 different variables, each of which is unique. For now, that is all we need to know about the test set, that the data is "well behaved". We'll shift focus back to our training data for the present.
+
+### Label Imbalance
+
+With any label data, it's useful to know the label balance. For `BikeBuyer`, our current label of interest, we want to know how many people did vs did not buy bikes. We'll transform the label data to make it a bit easier to read, and then check the label balance.
+
+```{r}
+customerData %<>% 
+  mutate(
+    BikeBuyer = ifelse(BikeBuyer == 1, "yes", "no") %>% as.factor()
+  )
+table(customerData$BikeBuyer)
+table(customerData$BikeBuyer)[1]/table(customerData$BikeBuyer)[2]
+```
+
+As we can see, the ratio of customers that didn't buy bikes to those who did is 2:1. We'll take that into consideration later, but for now, we'll split `customerData` into training and validation sets.
+
+```{r}
+partition = createDataPartition(customerData$BikeBuyer, times = 1, p = 0.7, list = FALSE)
+training = customerData[partition,] # Create the training sample
+validation = customerData[-partition,] # Create the test sample
+
+cat(
+  "Dim Training:  ", dim(training),
+  "\nDim Validation: ", dim(validation)
+)
+```
+
+### Feature Selection
+
+Next we'll go through the data and sort out which of our variables we'll include in our model. We'll also scale and center our numerical data.
+
+```{r}
+colnames(customerData)
+```
+
+Variables 1-13 just give basic identification information about the customers, and are not likely to correlate well with any predictive information. We'll drop them. 
+
+The `BirthDate` variable is likely just a poor man's version of the `Age` or `Age Category` variable, as it is unlikely that bike buyers all have the commonalities in birth month or date. The `Age Category` variable is also dubious, as age categories were created as per the dictates of a data challenge question. The age category separations might be meaningful, but will need to be inspected further before we can just accept them as being more useful than just `Age`. As such, we'll simply drop it for now. 
+
+On the other hand, the created variables of `CarCategory` and `ChildrenHome` did seem to split the data well. We'll keep these variables, and transform the `testing` data set to include them.
+
+Finally, our testing data doesn't have access to the `AveMonthSpend` variable, and so we can drop it for the time being.
+
+
+```{r}
+ppCustomerData <- customerData %>% select(-(1:13),-BirthDate, -AgeCategory, -AveMonthSpend)
+ppCustomerData %>% head(10) %>% as.tibble()
+```
 

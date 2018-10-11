@@ -344,9 +344,9 @@ After optimizing for ROC, we get the optimal decay and network size. Given this 
 
 ```{r}
 options(repr.plot.width=8, repr.plot.height=6)
-var_imp <- varImp(nn_fit_inside_tw)
-print(var_imp)
-plot(var_imp)
+var_imp_nn <- varImp(nn_fit_inside_tw)
+print(var_imp_nn)
+plot(var_imp_nn)
 ```
 
 Delving a bit further, we can map out how our parameter sweep of decay and size effect the overall ROC.
@@ -439,4 +439,43 @@ We could try to better tune the model, searching for better hyperparameters, or 
 ## Random Forests
 
 Being that neither of these models is amazing, we'll attempt a third model using random forests.
+
+
+```{r}
+fitControl <- trainControl(
+  method = "cv",
+  number = 5,
+  returnResamp="all",
+  savePredictions = TRUE,
+  classProbs = TRUE,
+  summaryFunction = twoClassSummary
+)
+
+paramGrid <- expand.grid(mtry = c(5, 10, 15))
+
+set.seed(1234)
+rf_fit_inside_tw <- train(
+  BikeBuyer ~ ., 
+  data = training,  
+  method = "rf", # Random forest model 
+  trControl = fitControl, 
+  tuneGrid = paramGrid, 
+  weights = weights, 
+  metric = "ROC"
+)
+
+print(rf_fit_inside_tw)
+```
+
+
+```{r}
+options(repr.plot.width=8, repr.plot.height=6)
+var_imp_tree <- varImp(rf_fit_inside_tw)
+print(var_imp_tree)
+plot(var_imp_tree)
+```
+
+```{r}
+tr_validation_prediction <- predict()
+```
 

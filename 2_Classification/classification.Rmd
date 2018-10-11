@@ -14,6 +14,8 @@ suppressPackageStartupMessages(library(magrittr))
 suppressPackageStartupMessages(library(tidyverse))
 suppressPackageStartupMessages(library(lubridate))
 suppressPackageStartupMessages(library(caret))
+suppressPackageStartupMessages(library(caretEnsemble))
+suppressPackageStartupMessages(library(mlbench))
 suppressPackageStartupMessages(library(ROCR))
 suppressPackageStartupMessages(library(pROC))
 suppressPackageStartupMessages(library(psych))
@@ -39,17 +41,10 @@ To complete this challenge:
 
 Loading the csv files into dataframes in R goes as follows. Note that the `customerData` dataset has been cleaned and explored in the previous section of the data challenge.
 ```{r}
-testData <- read.csv("AW_test.csv", stringsAsFactors = FALSE)
 customerData <- read.csv("../customerData.csv", stringsAsFactors = FALSE)
 ```
 
-Looking at the structure of the new dataset:
-```{r}
-testData %>% str()
-testData$CustomerID %>% unique() %>% length()
-```
-
-We have 500 observations of 23 different variables, each of which is unique. For now, that is all we need to know about the test set, that the data is "well behaved". We'll shift focus back to our training data for the present.
+This is the same data that was cleaned with the data exploration.
 
 ### Label Imbalance
 
@@ -62,7 +57,9 @@ customerData %<>%
     HomeOwnerFlag = ifelse(HomeOwnerFlag == 1, "yes", "no") %>% as.factor()
   )
 table(customerData$BikeBuyer)
-table(customerData$BikeBuyer)[1]/table(customerData$BikeBuyer)[2]
+
+ratio <- table(customerData$BikeBuyer)[1]/table(customerData$BikeBuyer)[2]
+ratio
 ```
 
 As we can see, the ratio of customers that didn't buy bikes to those who did is 2:1. We'll take that into consideration later. 
@@ -98,7 +95,7 @@ num_cols <- sapply(customerData,class) %in% c("integer","numeric") %>%
 num_cols
 ```
 
-We see that despite being numeric, the first three variables, ```NumberCarsOwned, NumberChildrenAtHome, TotalChildren``` are better classified as categorical variables than numerical. We correct this.
+We see that despite being numeric, the first three variables, `NumberCarsOwned, NumberChildrenAtHome, TotalChildren` are better classified as categorical variables than numerical. We correct this.
 
 ```{r}
 fact_cols <- num_cols[1:3]
@@ -121,6 +118,16 @@ preProcValues <- preProcess(customerData[,num_cols], method = c("center", "scale
 ppCustomerData <- customerData
 ppCustomerData[,num_cols] <-  predict(preProcValues, customerData[,num_cols])
 head(ppCustomerData[,num_cols])
+```
+
+Before continuing we'll convert the remaining character features into factors.
+
+```{r}
+char_cols <- ppCustomerData %>% sapply(class) %in% "character"
+ppCustomerData[,char_cols] %<>% lapply(., as.factor)
+
+fact_cols <- ppCustomerData %>% sapply(class) %in% "factor"
+ppCustomerData %>% head() %>% as.tibble
 ```
 
 We check for low variance features that could be removed from the model.
@@ -149,7 +156,7 @@ In later rounds of revision, we might do Principle Component Analysis here, tryi
 
 ### Split Data
 
-We'll split `customerData` into training and validation sets.
+We'll split `customerData` into training and validation sets. Normally the data is split into training and testing data sets, but since this data challenge was connected to an online class that wanted me to make predictions with a different set of "testing" data, I split the data like this.
 
 ```{r}
 partition  <- createDataPartition(ppCustomerData$BikeBuyer, times = 1, p = 0.7, list = FALSE)
@@ -165,17 +172,9 @@ cat(
 )
 ```
 
-## Determine Hyperparamets Using Nested CV
+## Determine Hyperparameters Using Nested CV
 
-Before continuing we'll convert the remaining character features into factors.
-
-```{r}
-char_cols <- training %>% sapply(class) %in% "character"
-training[,char_cols] %<>% lapply(., as.factor)
-
-fact_cols <- training %>% sapply(class) %in% "factor"
-training %>% head() %>% as.tibble
-```
+This method looks at how well hyperparameters perform across different folds, and then averages them.
 
 ### Inner Loop CV
 
@@ -183,15 +182,21 @@ Because we want our data to be balanced, we weight the cases of bike buyers twic
 
 We're using the `trainControl` function to specify that we're doing cross validation (CV) across 10 folds, that we're going to record the probability of each class (along with predicted values) in each resample. The `twoClassSummary` function defines the metric as the used for model selection to be ROC.
 
-The `train` function specifies that we're predicting BikeBuyer status based on all the other factors. That we're using the l2 norm "glmnet", how much to weight each case, that we're using the ROC metric, and that the CV information can be found in the `fitControl` object.
+The `train` function specifies that we're predicting BikeBuyer status based on all the other factors. That we're using the a mixing of the L1 and L2 norm in the method "glmnet". We define weights for each case, that we're using the ROC metric, and that the CV information can be found in the `fitControl` object.
 
-```{r}
+```{r cc-1, cache=TRUE}
 ## Create a weight vector for the training cases.
 weights <- ifelse(trainingLabel == 'yes', 2/3, 1/3)
 
+glmGrid <- expand.grid(
+  alpha = c(10^(-3:-1), 3*10^(-3:-1), .7, 1),
+  lambda = 10^(-5:-2)
+)
+
 fitControl <- trainControl(
-  method = 'cv',
+  method = 'repeatedcv',
   number = 10,
+  repeats = 3,
   classProbs = TRUE,
   summaryFunction = twoClassSummary
 )
@@ -202,40 +207,56 @@ cv_mod_roc <- train(
   method    = "glmnet", 
   weights   = weights, 
   metric    = "ROC",
-  trControl = fitControl
+  trControl = fitControl,
+  tuneGrid  = glmGrid
 )
 
 cv_mod_roc
 ```
 
-We can plot the results of hyperparameter search for maximal ROC 
+We can plot the results of hyperparameter search for maximal ROC.
 
 ```{r}
-plot(
-  cv_mod_roc, metric = "ROC", plotType = "level",
-  scales = list(x = list(rot = 90))
-)
+ggplot(cv_mod_roc) + 
+  scale_x_continuous(trans = 'log10') +
+  theme_minimal()
 ```
 
+This plot shows that our nested CV model is doing a good job optimizing: neither alpha  nor lambda get improve as they deviate from our optimal value. On the other hand, there are many values for alpha and lambda that are close to the optimal value. We'll just choose the best performer for right now.
+
+A model can sometimes be improved by pruning unimportant features.
+```{r}
+var_imp_glm <- varImp(cv_mod_roc)
+var_imp_glm$importance %>% 
+  rownames_to_column() %>% 
+  arrange(rowname)
+plot(var_imp_glm)
+```
+
+In this case, `CarCategory` and `YearlyIncome` seem to provide no information for the model, so they would be better left out of the model going forward.
 
 With the inner loop complete we can examine an outer loop. Consistent performance across the folds indicates that the model is likely to generalize well when faced with new data values.
 
-```{r}
+```{r cachedChunk0, cache=TRUE}
 ## Set the hyperparameter grid to the optimal values from the inside loop
 paramGrid <- expand.grid(alpha = c(cv_mod_roc$bestTune$alpha),
                          lambda = c(cv_mod_roc$bestTune$lambda))
 
-fitControl = trainControl(method = 'cv',
-                          number = 10,
-                          returnResamp="all",
-                          savePredictions = TRUE,
-                          classProbs = TRUE,
-                          summaryFunction = twoClassSummary)
+fitControl = trainControl(
+  method = 'repeatedcv',
+  number = 10,
+  repeats = 3,
+  returnResamp="all",
+  savePredictions = TRUE,
+  classProbs = TRUE,
+  summaryFunction = twoClassSummary
+)
 
 set.seed(1234)
 cv_mod_outer <- train(
   BikeBuyer ~ .,
-  data      = training, 
+  data      = training %>% 
+    select(-CarCategory, -YearlyIncome), 
   method    = "glmnet", 
   weights   = weights, 
   tuneGrid = paramGrid,
@@ -246,10 +267,16 @@ cv_mod_outer <- train(
 
 
 print_metrics = function(mod){
-    means = c(apply(mod$resample[,1:3], 2, mean), alpha = mod$resample[1,4], 
-                lambda = mod$resample[1,5], Resample = 'Mean')
-    stds = c(apply(mod$resample[,1:3], 2, sd), alpha = mod$resample[1,4], 
-                lambda = mod$resample[1,5], Resample = 'STD')
+    means = c(apply(mod$resample[,1:3], 2, mean), 
+              alpha = mod$resample[1,4], 
+              lambda = mod$resample[1,5], 
+              Resample = 'Mean')
+    
+    stds = c(apply(mod$resample[,1:3], 2, sd), 
+             alpha = mod$resample[1,4], 
+             lambda = mod$resample[1,5], 
+             Resample = 'STD')
+    
     out = rbind(mod$resample, means, stds)
     out[,1:3] = lapply(out[,1:3], function(x) round(as.numeric(x), 3))
     out
@@ -314,17 +341,18 @@ A neural net takes in our variables, and then tries to build a function that pre
 
 This example will include a neural net with one hidden layer. The number of nodes contained in that hidden layer we'll let the model work out for itself.
 
-```{r cachedChunk, cache=TRUE}
+```{r cachedChunk1, cache=TRUE}
 fitControl <- trainControl(
-  method = "cv",
+  method = "repeatedcv",
   number = 5,
+  repeats = 3,
   returnResamp="all",
   savePredictions = TRUE,
   classProbs = TRUE,
   summaryFunction = twoClassSummary
 )
 
-paramGrid <- expand.grid(size = c(3, 6, 9, 15), decay = c(10, 1, 0.1, 0.01))
+paramGrid <- expand.grid(size = c(6, 9, 15, 20), decay = c(10, 1, 0.1, 0.01))
 
 set.seed(1234)
 nn_fit_inside_tw <- train(
@@ -345,25 +373,27 @@ After optimizing for ROC, we get the optimal decay and network size. Given this 
 ```{r}
 options(repr.plot.width=8, repr.plot.height=6)
 var_imp_nn <- varImp(nn_fit_inside_tw)
-print(var_imp_nn)
+var_imp_nn$importance %>% 
+  rownames_to_column() %>% 
+  arrange(rowname)
 plot(var_imp_nn)
 ```
 
-Delving a bit further, we can map out how our parameter sweep of decay and size effect the overall ROC.
+We can none of the features were particularly not useful to the model. Delving a bit further, we can map out how our parameter sweep of decay and size effect the overall ROC.
 
 ```{r}
-trellis.par.set(caretTheme())
-plot(nn_fit_inside_tw)
+ggplot(nn_fit_inside_tw) + theme_minimal()
 ```
 
-By the looks of things, it seems that decay values of 0.01 and 10 underperform compared to the more moderate values of 0.1 and 1. This indicates that we're nearing an optimal value with the middle two parameters, although with only 16 data points it's hard to say conclusively. Furthermore, of the number of nodes values we selected, around 9 performed best.
+By the looks of things, it seems that decay values of 0.01 and 10 underperform compared to the more moderate values of 0.1 and 1. This indicates that we're nearing an optimal value with the middle two parameters, although with only 16 data points and no strong trend it's hard to say conclusively. Furthermore, of the number of nodes values we selected, 15 performed best.
 
-To verify that the model will generalize well we perform an outer cv loop. 
+To verify that the model will generalize well we perform an outer cv loop. Note that the model is removing some less-important features.
 
-```{r}
+```{r cachedChunk2, cache=TRUE}
 fitControl <- trainControl(
-  method = "cv",
+  method = "repeatedcv",
   number = 5,
+  repeats = 3,
   returnResamp="all",
   savePredictions = TRUE,
   classProbs = TRUE,
@@ -402,7 +432,9 @@ print_metrics = function(mod){
 print_metrics(nn_fit_outer_tw)
 ```
 
-The ROC mean and standard deviation are two orders of magnitude different from one another. It's interesting that both the neural network method and a simple cross validation yield similar ROC values.
+The ROC mean and standard deviation are two orders of magnitude different from one another. The inner CV and outer CV have approximately the same ROC, meaning that removing the features likely improved our model.
+
+On another note, it's interesting that both the neural network method and a simple cross validation yield similar ROC values.
 
 ### Cross-correlating Results
 
@@ -426,13 +458,13 @@ cv_validation_pred <- predict(cv_mod_outer,    validation)
 confusionMatrix(nn_validation_pred, validationLabel[,1], positive = "yes")
 ```
 
-We see that the neural network is performing at around a 77% correct prediction rate, similar to the cross CV model. But how often do these models make the same predictions?
+We see that the neural network is performing at around a 75% correct prediction rate, similar to the cross CV model. But how often do these models make the same predictions about the validation data?
 
 ```{r}
 confusionMatrix(nn_validation_pred, cv_validation_pred, positive = "yes")
 ```
 
-The vast majority of the time (>95%) when one model would predict "yes" for `BikeBuyer`, the other model would as well. This means that averaging the numerical predictions is unlikely to significantly change our model accuracy (at best around 5%).
+The majority of the time (>90%) when one model would predict "yes" for `BikeBuyer`, the other model would as well. This means that stacking the numerical predictions is unlikely to significantly change our model accuracy (at best around 5%).
 
 We could try to better tune the model, searching for better hyperparameters, or we could create / remove model features to try to improve results, but since we're doing a survey of different techniques, let's try something completely different.
 
@@ -441,17 +473,18 @@ We could try to better tune the model, searching for better hyperparameters, or 
 Being that neither of these models is amazing, we'll attempt a third model using random forests.
 
 
-```{r}
+```{r cachedChunk3, cache=TRUE}
 fitControl <- trainControl(
-  method = "cv",
+  method = "repeatedcv",
   number = 5,
+  repeats = 3,
   returnResamp="all",
   savePredictions = TRUE,
   classProbs = TRUE,
   summaryFunction = twoClassSummary
 )
 
-paramGrid <- expand.grid(mtry = c(5, 10, 15))
+paramGrid <- expand.grid(mtry = c(4:7))
 
 set.seed(1234)
 rf_fit_inside_tw <- train(
@@ -467,15 +500,112 @@ rf_fit_inside_tw <- train(
 print(rf_fit_inside_tw)
 ```
 
+Next we visualize how the parameter `mtry` correlated with ROC.
+```{r}
+ggplot(rf_fit_inside_tw) + theme_minimal()
+```
+
+
 
 ```{r}
-options(repr.plot.width=8, repr.plot.height=6)
 var_imp_tree <- varImp(rf_fit_inside_tw)
-print(var_imp_tree)
+var_imp_tree$importance %>% 
+  rownames_to_column %>% 
+  arrange(rowname)
 plot(var_imp_tree)
 ```
 
-```{r}
-tr_validation_prediction <- predict()
+In this model it seems that features are playing at least some role in the model. although we could try removing `Education` and/or `Occupation` to see if our results improve, we'll leave all the features be for now. 
+
+```{r cachedChunk4, cache=TRUE}
+fitControl <- trainControl(
+  method = "repeatedcv",
+  number = 5,
+  repeats = 3,
+  returnResamp="all",
+  savePredictions = TRUE,
+  classProbs = TRUE,
+  summaryFunction = twoClassSummary)
+
+paramGrid <- expand.grid(mtry  = c(rf_fit_inside_tw$bestTune$mtry[1]))
+
+set.seed(1234)
+rf_fit_outer_tw <- train(
+  BikeBuyer ~ ., 
+  data = training,
+  method = "rf",
+  trControl = fitControl, 
+  tuneGrid = paramGrid, 
+  weights = weights, 
+  trace = FALSE,
+  metric="ROC")
+
+print_metrics = function(mod){
+    means = c(apply(mod$resample[,1:3], 2, mean), 
+              mtry = mod$resample[1,4],
+              Resample = 'Mean')
+    
+    stds = c(apply(mod$resample[,1:3], 2, sd), 
+             mtry = mod$resample[1,4], 
+             Resample = 'STD')
+    
+    out = rbind(mod$resample, means, stds)
+    out[,1:3] = lapply(out[,1:3], function(x) round(as.numeric(x), 3))
+    out
+}
+
+print_metrics(rf_fit_outer_tw)
 ```
 
+```{r}
+tr_validation_prediction <- predict(rf_fit_outer_tw, validation)
+confusionMatrix(tr_validation_prediction, validationLabel[,1], positive = "yes")
+```
+
+The random forest method is performing significantly better than the glm or neural network models, with around 85% accuracy. 
+
+## Stacking Algorithms
+
+We can combine our models' predictions in a general linearized model, perhaps allowing the strengths of each model to shine through.
+
+```{r}
+predictionDF <- data.frame(
+  validationLabel = validationLabel$BikeBuyer,
+  cv_validation_pred,
+  nn_validation_pred,
+  tr_validation_prediction
+)
+
+modelStack <- train(validationLabel~., predictionDF, method = "glm")
+
+print(modelStack)
+```
+
+We see that the stacked models perform better than any individual model. Furthermore here is the relative variable importance.
+
+```{r}
+var_imp_ms <- varImp(modelStack)
+var_imp_ms$importance %>% 
+  rownames_to_column() %>% 
+  arrange(rowname)
+plot(var_imp_ms)
+```
+
+The tree model made the most accurate predictions, while the glm and the neural net played less of a role in the final model.
+
+Finally, we check to see how well the stacked model performed.
+
+```{r}
+ms_validation_pred <- predict(modelStack, validation)
+confusionMatrix(ms_validation_pred, validationLabel[,1], positive  = "yes")
+```
+
+## Overview
+
+Together the stacked model had a successful prediciton rate of around 85%, which not significantly different than the simple random forest model. It seems that the gains that the other models provided were offset by the losses of making incorrect predictions. Perhaps a different stacking method (e.g. random forest) would give better results, or perhaps the stacking method should have its own hyperparameter sweet to achieve optimal effectiveness.
+
+If we had to choose one model right now, we would use a random forest model for predicting whether or not a person is likely to buy a bike from this shop. It will be computationally more efficient and simpler than using 3 stacked models, and is likely to be just as accurate in the end. 
+
+We could also work to further improve the random forest model (and/or other models) by doing a principle component analysis beforehand, or by removing variables that have relatively low impact on our model. We could also change our inner cross validation parameters, altering the number of folds and or the number of repeats, in order to increase accuracy or reduce bias. As a final step, we would allow the model to do a final pass using the complete dataset (both training and validation) for our random trees. This could help improve the accuracy of a finalized model.
+
+But for now we'll leave the models as they are, and point out what could be done differently if it were important to have better results.

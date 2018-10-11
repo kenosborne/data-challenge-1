@@ -189,7 +189,7 @@ The `train` function specifies that we're predicting BikeBuyer status based on a
 weights <- ifelse(trainingLabel == 'yes', 2/3, 1/3)
 
 glmGrid <- expand.grid(
-  alpha = c(10^(-3:-1), 3*10^(-3:-1), .7, 1),
+  alpha = c(10^(-3:-1), 3*10^(-3:-1), 1),
   lambda = 10^(-5:-2)
 )
 

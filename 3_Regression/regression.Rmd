@@ -1,0 +1,149 @@
+---
+title: "Regression"
+author: "Kenneth L Osborne"
+date: "October 12, 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+suppressPackageStartupMessages(library(magrittr))
+suppressPackageStartupMessages(library(tidyverse))
+suppressPackageStartupMessages(library(lubridate))
+suppressPackageStartupMessages(library(caret))
+suppressPackageStartupMessages(library(caretEnsemble))
+suppressPackageStartupMessages(library(mlbench))
+suppressPackageStartupMessages(library(ROCR))
+suppressPackageStartupMessages(library(pROC))
+suppressPackageStartupMessages(library(psych))
+```
+
+# Regression
+
+Regression
+
+Now, you must use any combination of Azure Machine Learning, R or Python to create a regression model that predicts the average monthly spend of a new customers.
+
+1.Use the Adventure Works Cycles customer data you worked with in challenge 1 and 2 to create a regression model that predicts a customer's average monthly spend. The model should predict average monthly spend for new customers for whom no information about average monthly spend or previous bike purchases is available.
+
+2.Download the test data. This is the same test data that you have used in classification challenge. This data includes customer features but does not include bike purchasing or average monthly spend values.
+
+3.Use your model to predict on the corresponding test dataset. Don't forget to apply what you've learned throughout this course.
+Go to the next page to check how well your prediction against the actual result.
+
+## Data Prep
+
+Loading the csv files into dataframes in R goes as follows. Note that the `customerData` dataset has been cleaned and explored in the previous section of the data challenge.
+```{r}
+customerData <- read.csv("../customerData.csv", stringsAsFactors = FALSE)
+```
+
+This is the same data that was cleaned with the data exploration.
+
+### Label Imbalance
+
+With any label data, it's useful to know the label balance. For `BikeBuyer`, our current label of interest, we want to know how many people did vs did not buy bikes. We'll transform the label data to make it a bit easier to read, and then check the label balance. We'll do the same for the `HomeOwnerFlag` variable while we're at it.
+
+```{r}
+customerData %<>% 
+  mutate(
+    BikeBuyer = ifelse(BikeBuyer == 1, "yes", "no") %>% as.factor(),
+    HomeOwnerFlag = ifelse(HomeOwnerFlag == 1, "yes", "no") %>% as.factor()
+  )
+table(customerData$BikeBuyer)
+
+ratio <- table(customerData$BikeBuyer)[1]/table(customerData$BikeBuyer)[2]
+ratio
+```
+
+As we can see, the ratio of customers that didn't buy bikes to those who did is 2:1. We'll take that into consideration later. 
+
+### Feature Selection
+
+Next we'll go through the data and sort out which of our variables we'll include in our model. We'll also scale and center our numerical data.
+
+```{r}
+colnames(customerData)
+```
+
+Variables 1-13 just give basic identification information about the customers, and are not likely to correlate well with any predictive information. We'll drop them. 
+
+The `BirthDate` variable is likely just a poor man's version of the `Age` or `Age Category` variable, as it is unlikely that bike buyers all have the commonalities in birth month or date.
+
+On the other hand, the created variables of `CarCategory` and `ChildrenHome` did seem to split the data well. We'll keep these variables, and transform the `testing` data set to include them.
+
+Finally, for this challenge, we don't have access to the `BikeBuyer` variable, and so we drop it for the time being.
+
+
+```{r}
+customerData <- customerData %>% select(-(1:13),-BirthDate, -BikeBuyer)
+customerData %>% head(10) %>% as.tibble()
+```
+
+We'll scale and center the numeric variables.
+
+```{r}
+num_cols <- sapply(customerData,class) %in% c("integer","numeric") %>% 
+  colnames(customerData)[.]
+
+num_cols
+```
+
+We see that despite being numeric, the first three variables, `NumberCarsOwned, NumberChildrenAtHome, TotalChildren` are better classified as categorical variables than numerical. We correct this.
+
+```{r}
+fact_cols <- num_cols[1:3]
+customerData[,fact_cols] %<>% sapply(., as.factor)
+num_cols %<>% .[-(1:3)] #leave out the first three variables, they're more categorical
+```
+
+Then we check that our numerical data are well behaved.
+
+```{r}
+sapply(customerData[,num_cols], skew)
+multi.hist(customerData[,num_cols])
+```
+
+Seeing that these data aren't crazily skewed, we can continue with the analysis
+
+```{r}
+preProcValues <- preProcess(customerData[,num_cols], method = c("center", "scale"))
+
+ppCustomerData <- customerData
+ppCustomerData[,num_cols] <-  predict(preProcValues, customerData[,num_cols])
+head(ppCustomerData[,num_cols])
+```
+
+Before continuing we'll convert the remaining character features into factors.
+
+```{r}
+char_cols <- ppCustomerData %>% sapply(class) %in% "character"
+ppCustomerData[,char_cols] %<>% lapply(., as.factor)
+
+fact_cols <- ppCustomerData %>% sapply(class) %in% "factor"
+ppCustomerData %>% head() %>% as.tibble
+```
+
+Other analyses are done in the classification challenge to show that none of the features is near zero variance. As such we'll continue to the analysis.
+
+## Regression Models
+
+We will use several different regression models, trying to optimize for the smallest RSME, but first, we will partition the data.
+
+```{r}
+partition  <- createDataPartition(ppCustomerData$BikeBuyer, 
+                                  times = 1, p = 0.7, list = FALSE)
+training   <- customerData[ partition,] # Create the training sample
+validation <- customerData[-partition,] # Create the test sample
+
+trainingLabel   <- customerData[ partition,] %>% select(AveMonthSpend)
+validationLabel <- customerData[-partition,] %>% select(AveMonthSpend)
+
+cat(
+  "Dim Training:  ", dim(training),
+  "\nDim Validation: ", dim(validation)
+)
+```

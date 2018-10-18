@@ -61,7 +61,7 @@ ratio
 
 As we can see, the ratio of customers that didn't buy bikes to those who did is 2:1. We'll take that into consideration later. 
 
-### Feature Selection
+### Preprocessing
 
 Next we'll go through the data and sort out which of our variables we'll include in our model. We'll also scale and center our numerical data.
 
@@ -79,7 +79,7 @@ Finally, for this challenge, we don't have access to the `BikeBuyer` variable, a
 
 
 ```{r}
-customerData <- customerData %>% select(-(1:13),-BirthDate, -BikeBuyer)
+customerData <- customerData %>% select(-(1:13),-BirthDate, -BikeBuyer) %>% mutate(logSpend = log10(AveMonthSpend))
 customerData %>% head(10) %>% as.tibble()
 ```
 
@@ -107,7 +107,7 @@ sapply(customerData[,num_cols], skew)
 multi.hist(customerData[,num_cols])
 ```
 
-Seeing that these data aren't crazily skewed, we can continue with the analysis
+The `AveMonthSpend` plot is a little right-skewed, so we'll use the `logSpend` instead, which is much more normal.
 
 ```{r}
 preProcValues <- preProcess(customerData[,num_cols], method = c("center", "scale"))
@@ -129,15 +129,15 @@ ppCustomerData %>% head() %>% as.tibble
 
 Other analyses are done in the classification challenge to show that none of the features is near zero variance. As such we'll continue to the analysis.
 
-## Regression Models
+## Regression Model
 
 We will use several different regression models, trying to optimize for the smallest RSME, but first, we will partition the data.
 
 ```{r}
-partition  <- createDataPartition(ppCustomerData$BikeBuyer, 
+partition  <- createDataPartition(ppCustomerData$logSpend, 
                                   times = 1, p = 0.7, list = FALSE)
-training   <- customerData[ partition,] # Create the training sample
-validation <- customerData[-partition,] # Create the test sample
+training   <- ppCustomerData[ partition,] # Create the training sample
+validation <- ppCustomerData[-partition,] # Create the test sample
 
 trainingLabel   <- customerData[ partition,] %>% select(AveMonthSpend)
 validationLabel <- customerData[-partition,] %>% select(AveMonthSpend)
@@ -147,3 +147,75 @@ cat(
   "\nDim Validation: ", dim(validation)
 )
 ```
+
+Next we define and fit the linear regression
+
+```{r}
+lin_mod <- lm(logSpend ~ ., data = training %>% select(-AveMonthSpend))
+summary(lin_mod)
+```
+
+
+
+
+## Model Predictions
+
+We predicted on a log base 10, centered and scaled model. We can undo the centering and scaling. Each point was modified by the formula
+
+xnew = (xold - xavg)/xsd
+
+Where xavg and xsd are the mean and standard deviation our logSpend variable. Then we'll need to undo the log10, which requires taking 10 to the xold. 
+
+### Training Data
+
+We back transform the `logSpend` data, and check how well our model predicted the regular training data. 
+
+```{r}
+scaled_training_prediction <- predict(lin_mod, training %>% select(-AveMonthSpend))
+
+xavg <- customerData$logSpend[partition] %>% mean()
+xsd <- customerData$logSpend[partition] %>% sd()
+uncentered_unscaled_training <- scaled_training_prediction*xsd + xavg 
+
+training_prediction <- 10^uncentered_unscaled_training
+```
+
+Find RMSE of training set, we compare that with the average and standard deviation.
+
+```{r}
+err_training <- RMSE(training_prediction, trainingLabel[,1])
+avg_training <- trainingLabel$AveMonthSpend %>% mean
+sd_training <- trainingLabel$AveMonthSpend %>% sd
+
+cat("RMSE:     ", err_training,
+    "\nAverage:   ", avg_training,
+    "\nDeviation: ", sd_training)
+```
+
+Despite the large deviations in the dataset, our RMSE was only 3.5, a sign our model did well.
+
+### Validation Data
+
+And then for the true test, our validation data predictions
+
+```{r}
+scaled_validation_prediction <- predict(lin_mod, validation %>% select(-AveMonthSpend))
+
+vavg <- customerData$logSpend[-partition] %>% mean()
+vsd <- customerData$logSpend[-partition] %>% sd()
+uncentered_unscaled_validation <- scaled_validation_prediction*xsd + xavg 
+
+validation_prediction <- 10^uncentered_unscaled_validation
+
+err_testing <- RMSE(validation_prediction, validationLabel[,1])
+avg_testing <- validationLabel$AveMonthSpend %>% mean
+sd_testing <- validationLabel$AveMonthSpend %>% sd
+
+cat("\nRMSE:     ", err_testing,
+    "\nAverage:   ", avg_testing,
+    "\nDeviation: ", sd_testing)
+```
+
+Our model shows no difference significant difference in the training and validation sets!
+
+
